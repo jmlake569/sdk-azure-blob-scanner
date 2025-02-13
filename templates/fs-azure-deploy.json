@@ -14,13 +14,6 @@
                 "description": "API Key for the scanning service"
             }
         },
-        "ServicePrincipalId": {
-            "type": "string",
-            "metadata": {
-                "description": "The ID of the Service Principal for authentication"
-            },
-            "maxLength": 36
-        },
         "ScannerStackResourceGroup": {
             "type": "string",
             "defaultValue": "Scanner-MalwareScan",

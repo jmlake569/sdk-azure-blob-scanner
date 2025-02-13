@@ -7,8 +7,17 @@
                 "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/YOUR-RG/providers/Microsoft.Storage/storageAccounts/YOUR-STORAGE"
             ]
         },
-        "ServicePrincipalId": {
-            "value": "YOUR-SERVICE-PRINCIPAL-ID"
+        "apiKey": {
+            "value": "YOUR-TREND-API-KEY"
+        },
+        "UpdateScanResultToBlobMetadata": {
+            "value": "Yes"
+        },
+        "LogAnalyticsWorkspaceResourceID": {
+            "value": ""
+        },
+        "StorageStackFunctionAppServicePlan": {
+            "value": "Y1"
         },
         "ScannerStackResourceGroup": {
             "value": "Scanner-MalwareScan"
