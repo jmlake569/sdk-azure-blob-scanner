@@ -6,7 +6,9 @@
             "type": "array",
             "metadata": {
                 "description": "Array of Storage Account Resource IDs to scan"
-            }
+            },
+            "defaultValue": [],
+            "minLength": 1
         },
         "apiKey": {
             "type": "securestring",
