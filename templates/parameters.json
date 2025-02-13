@@ -1,0 +1,20 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "StorageAccounts": {
+            "value": [
+                "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/YOUR-RG/providers/Microsoft.Storage/storageAccounts/YOUR-STORAGE"
+            ]
+        },
+        "ServicePrincipalId": {
+            "value": "YOUR-SERVICE-PRINCIPAL-ID"
+        },
+        "ScannerStackResourceGroup": {
+            "value": "Scanner-MalwareScan"
+        },
+        "functionPackageUrl": {
+            "value": "https://raw.githubusercontent.com/YOUR_USERNAME/sdk-azure-blob-scanner/main/deploy/functions.zip"
+        }
+    }
+}

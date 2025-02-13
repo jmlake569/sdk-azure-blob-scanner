@@ -1,0 +1,293 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "StorageAccounts": {
+            "type": "array",
+            "metadata": {
+                "description": "Array of Storage Account Resource IDs to scan"
+            }
+        },
+        "apiKey": {
+            "type": "securestring",
+            "metadata": {
+                "description": "API Key for the scanning service"
+            }
+        },
+        "ServicePrincipalId": {
+            "type": "string",
+            "metadata": {
+                "description": "The ID of the Service Principal for authentication"
+            },
+            "maxLength": 36
+        },
+        "ScannerStackResourceGroup": {
+            "type": "string",
+            "defaultValue": "Scanner-MalwareScan",
+            "metadata": {
+                "description": "The name of the scanner stack resource group"
+            }
+        },
+        "functionPackageUrl": {
+            "type": "string",
+            "defaultValue": "https://raw.githubusercontent.com/jmlake569/sdk-azure-blob-scanner/main/deploy/functions.zip",
+            "metadata": {
+                "description": "URL to the pre-packaged function code"
+            }
+        },
+        "UpdateScanResultToBlobMetadata": {
+            "allowedValues": [
+                "Yes",
+                "No"
+            ],
+            "type": "String",
+            "defaultValue": "Yes",
+            "metadata": {
+                "description": "Select Yes to update both blob metadata and index tag with scan results. Select No to update only blob index tag."
+            }
+        },
+        "LogAnalyticsWorkspaceResourceID": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Resource ID of existing Log Analytics workspace for Application Insights. Leave blank to create new."
+            }
+        },
+        "StorageStackFunctionAppServicePlan": {
+            "type": "string",
+            "defaultValue": "Y1",
+            "allowedValues": [
+                "Y1",
+                "EP1"
+            ],
+            "metadata": {
+                "description": "Function app service plan. Y1 for consumption, EP1 for premium."
+            }
+        }
+    },
+    "variables": {
+        "location": "[resourceGroup().location]",
+        "functionAppName": "[concat('scanner-function-', uniqueString(resourceGroup().id))]",
+        "hostingPlanName": "[concat('asp-', variables('functionAppName'))]",
+        "storageAccountName": "[concat('scan', uniqueString(resourceGroup().id))]",
+        "keyVaultName": "[concat('kv-', variables('functionAppName'))]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2023-01-01",
+            "name": "[variables('storageAccountName')]",
+            "location": "[variables('location')]",
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "kind": "StorageV2",
+            "properties": {
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true,
+                "allowBlobPublicAccess": false,
+                "networkAcls": {
+                    "defaultAction": "Deny",
+                    "bypass": "AzureServices"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2024-04-01",
+            "name": "[variables('hostingPlanName')]",
+            "location": "[variables('location')]",
+            "sku": {
+                "name": "[parameters('StorageStackFunctionAppServicePlan')]",
+                "tier": "[if(equals(parameters('StorageStackFunctionAppServicePlan'), 'Y1'), 'Dynamic', 'ElasticPremium')]"
+            }
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "apiVersion": "2023-07-01",
+            "name": "[variables('keyVaultName')]",
+            "location": "[variables('location')]",
+            "properties": {
+                "enabledForTemplateDeployment": true,
+                "tenantId": "[subscription().tenantId]",
+                "sku": {
+                    "name": "standard",
+                    "family": "A"
+                },
+                "accessPolicies": [
+                    {
+                        "tenantId": "[subscription().tenantId]",
+                        "objectId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2024-04-01', 'Full').identity.principalId]",
+                        "permissions": {
+                            "secrets": ["get"]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults/secrets",
+            "apiVersion": "2023-07-01",
+            "name": "[concat(variables('keyVaultName'), '/ScannerApiKey')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+            ],
+            "properties": {
+                "value": "[parameters('apiKey')]"
+            }
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "apiVersion": "2020-02-02",
+            "name": "[variables('functionAppName')]",
+            "location": "[variables('location')]",
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[parameters('LogAnalyticsWorkspaceResourceID')]"
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2024-04-01",
+            "name": "[variables('functionAppName')]",
+            "location": "[variables('location')]",
+            "kind": "functionapp,linux",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+                "httpsOnly": true,
+                "siteConfig": {
+                    "linuxFxVersion": "Python|3.11",
+                    "minTlsVersion": "1.2",
+                    "ftpsState": "Disabled",
+                    "http20Enabled": true
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/sites/config",
+            "apiVersion": "2024-04-01",
+            "name": "[concat(variables('functionAppName'), '/appsettings')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+                "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'ScannerApiKey')]",
+                "[resourceId('Microsoft.EventGrid/topics', concat(variables('functionAppName'), '-results'))]"
+            ],
+            "properties": {
+                "AzureWebJobsStorage": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value)]",
+                "FUNCTIONS_EXTENSION_VERSION": "~4",
+                "FUNCTIONS_WORKER_RUNTIME": "python",
+                "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(resourceId('Microsoft.Insights/components', variables('functionAppName'))).InstrumentationKey]",
+                "SCANNER_API_KEY": "[concat('@Microsoft.KeyVault(SecretUri=', reference(resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'ScannerApiKey')).secretUriWithVersion, ')')]",
+                "SCAN_RESULTS_TOPIC_ENDPOINT": "[reference(resourceId('Microsoft.EventGrid/topics', concat(variables('functionAppName'), '-results'))).endpoint]",
+                "UPDATE_BLOB_METADATA": "[parameters('UpdateScanResultToBlobMetadata')]"
+            }
+        },
+        {
+            "type": "Microsoft.EventGrid/topics",
+            "apiVersion": "2024-06-01-preview",
+            "name": "[concat(variables('functionAppName'), '-results')]",
+            "location": "[variables('location')]",
+            "sku": {
+                "name": "Basic"
+            },
+            "properties": {
+                "inputSchema": "EventGridSchema"
+            }
+        },
+        {
+            "copy": {
+                "name": "eventGridTopics",
+                "count": "[length(parameters('StorageAccounts'))]"
+            },
+            "type": "Microsoft.EventGrid/systemTopics",
+            "apiVersion": "2024-06-01-preview",
+            "name": "[concat('scan-files-topic-', copyIndex())]",
+            "location": "[variables('location')]",
+            "properties": {
+                "source": "[parameters('StorageAccounts')[copyIndex()]]",
+                "topicType": "Microsoft.Storage.StorageAccounts"
+            }
+        },
+        {
+            "copy": {
+                "name": "eventGridSubscriptions",
+                "count": "[length(parameters('StorageAccounts'))]"
+            },
+            "type": "Microsoft.EventGrid/systemTopics/eventSubscriptions",
+            "apiVersion": "2024-06-01-preview",
+            "name": "[concat('scan-files-topic-', copyIndex(), '/scan-files-sub-', copyIndex())]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventGrid/systemTopics', concat('scan-files-topic-', copyIndex()))]",
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+            ],
+            "properties": {
+                "destination": {
+                    "properties": {
+                        "maxEventsPerBatch": 1,
+                        "preferredBatchSizeInKilobytes": 64,
+                        "resourceId": "[concat(resourceId('Microsoft.Web/sites', variables('functionAppName')), '/functions/BlobCreatedTrigger')]"
+                    },
+                    "endpointType": "AzureFunction"
+                },
+                "filter": {
+                    "includedEventTypes": [
+                        "Microsoft.Storage.BlobCreated"
+                    ]
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Authorization/roleAssignments",
+            "apiVersion": "2022-04-01",
+            "name": "[guid(resourceId('Microsoft.EventGrid/topics', concat(variables('functionAppName'), '-results')), variables('functionAppName'), 'EventGridDataSender')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.EventGrid/topics', concat(variables('functionAppName'), '-results'))]"
+            ],
+            "properties": {
+                "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'd5a91429-5739-47e2-a06b-3470a27159e7')]",
+                "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2024-04-01', 'Full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+            }
+        },
+        {
+            "copy": {
+                "name": "storageRoleAssignments",
+                "count": "[length(parameters('StorageAccounts'))]"
+            },
+            "type": "Microsoft.Authorization/roleAssignments",
+            "apiVersion": "2022-04-01",
+            "name": "[guid(parameters('StorageAccounts')[copyIndex()], variables('functionAppName'), 'StorageBlobDataContributor')]",
+            "properties": {
+                "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
+                "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2024-04-01', 'Full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+            }
+        }
+    ],
+    "outputs": {
+        "functionAppName": {
+            "type": "string",
+            "value": "[variables('functionAppName')]"
+        },
+        "functionAppIdentityPrincipalId": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2024-04-01', 'full').identity.principalId]"
+        },
+        "region": {
+            "type": "string",
+            "value": "[variables('location')]"
+        }
+    }
+}
