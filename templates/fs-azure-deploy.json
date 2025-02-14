@@ -5,10 +5,14 @@
         "StorageAccounts": {
             "type": "array",
             "metadata": {
-                "description": "Array of Storage Account Resource IDs to scan"
-            },
-            "defaultValue": [],
-            "minLength": 1
+                "description": "Array of storage account names to scan"
+            }
+        },
+        "StorageAccountResourceGroup": {
+            "type": "string",
+            "metadata": {
+                "description": "Resource Group of the Storage Accounts"
+            }
         },
         "apiKey": {
             "type": "securestring",
@@ -65,7 +69,8 @@
         "functionAppName": "[concat('scanner-function-', uniqueString(resourceGroup().id))]",
         "hostingPlanName": "[concat('asp-', variables('functionAppName'))]",
         "storageAccountName": "[concat('scan', uniqueString(resourceGroup().id))]",
-        "keyVaultName": "[concat('kv-', variables('functionAppName'))]"
+        "keyVaultName": "[concat('kv-', take(uniqueString(resourceGroup().id), 16))]",
+        "storageAccountId": "[resourceId(parameters('StorageAccountResourceGroup'), 'Microsoft.Storage/storageAccounts', parameters('StorageAccounts')[0])]"
     },
     "resources": [
         {
@@ -142,7 +147,7 @@
             "kind": "web",
             "properties": {
                 "Application_Type": "web",
-                "WorkspaceResourceId": "[parameters('LogAnalyticsWorkspaceResourceID')]"
+                "WorkspaceResourceId": "[if(empty(parameters('LogAnalyticsWorkspaceResourceID')), json('null'), parameters('LogAnalyticsWorkspaceResourceID'))]"
             }
         },
         {
@@ -158,7 +163,6 @@
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
                 "httpsOnly": true,
                 "siteConfig": {
-                    "linuxFxVersion": "Python|3.11",
                     "minTlsVersion": "1.2",
                     "ftpsState": "Disabled",
                     "http20Enabled": true
@@ -167,6 +171,20 @@
             "dependsOn": [
                 "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
                 "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/sites/sourcecontrols",
+            "apiVersion": "2024-04-01",
+            "name": "[concat(variables('functionAppName'), '/web')]",
+            "properties": {
+                "repoUrl": "[parameters('functionPackageUrl')]",
+                "branch": "main",
+                "isManualIntegration": true
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                "[resourceId('Microsoft.Web/sites/config', variables('functionAppName'), 'appsettings')]"
             ]
         },
         {
@@ -208,10 +226,10 @@
             },
             "type": "Microsoft.EventGrid/systemTopics",
             "apiVersion": "2024-06-01-preview",
-            "name": "[concat('scan-files-topic-', copyIndex())]",
+            "name": "[concat('scan-files-topic-', parameters('StorageAccounts')[copyIndex()])]",
             "location": "[variables('location')]",
             "properties": {
-                "source": "[parameters('StorageAccounts')[copyIndex()]]",
+                "source": "[resourceId(parameters('StorageAccountResourceGroup'), 'Microsoft.Storage/storageAccounts', parameters('StorageAccounts')[copyIndex()])]",
                 "topicType": "Microsoft.Storage.StorageAccounts"
             }
         },
@@ -222,10 +240,11 @@
             },
             "type": "Microsoft.EventGrid/systemTopics/eventSubscriptions",
             "apiVersion": "2024-06-01-preview",
-            "name": "[concat('scan-files-topic-', copyIndex(), '/scan-files-sub-', copyIndex())]",
+            "name": "[concat('scan-files-topic-', parameters('StorageAccounts')[copyIndex()], '/scan-files-sub')]",
             "dependsOn": [
-                "[resourceId('Microsoft.EventGrid/systemTopics', concat('scan-files-topic-', copyIndex()))]",
-                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+                "[resourceId('Microsoft.EventGrid/systemTopics', concat('scan-files-topic-', parameters('StorageAccounts')[copyIndex()]))]",
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                "[resourceId('Microsoft.Web/sites/sourcecontrols', variables('functionAppName'), 'web')]"
             ],
             "properties": {
                 "destination": {
@@ -244,26 +263,13 @@
             }
         },
         {
-            "type": "Microsoft.Authorization/roleAssignments",
-            "apiVersion": "2022-04-01",
-            "name": "[guid(resourceId('Microsoft.EventGrid/topics', concat(variables('functionAppName'), '-results')), variables('functionAppName'), 'EventGridDataSender')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.EventGrid/topics', concat(variables('functionAppName'), '-results'))]"
-            ],
-            "properties": {
-                "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'd5a91429-5739-47e2-a06b-3470a27159e7')]",
-                "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2024-04-01', 'Full').identity.principalId]",
-                "principalType": "ServicePrincipal"
-            }
-        },
-        {
             "copy": {
-                "name": "storageRoleAssignments",
+                "name": "roleAssignments",
                 "count": "[length(parameters('StorageAccounts'))]"
             },
             "type": "Microsoft.Authorization/roleAssignments",
             "apiVersion": "2022-04-01",
-            "name": "[guid(parameters('StorageAccounts')[copyIndex()], variables('functionAppName'), 'StorageBlobDataContributor')]",
+            "name": "[guid(resourceId(parameters('StorageAccountResourceGroup'), 'Microsoft.Storage/storageAccounts', parameters('StorageAccounts')[copyIndex()]), variables('functionAppName'), 'StorageBlobDataContributor')]",
             "properties": {
                 "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
                 "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2024-04-01', 'Full').identity.principalId]",
